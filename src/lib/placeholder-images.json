@@ -1,3 +1,34 @@
 {
-  "placeholderImages": []
+  "placeholderImages": [
+    {
+      "id": "user-avatar-1",
+      "description": "Avatar for Alex Durden",
+      "imageUrl": "https://picsum.photos/seed/1/40/40",
+      "imageHint": "person portrait"
+    },
+    {
+      "id": "user-avatar-2",
+      "description": "Avatar for Jane Doe",
+      "imageUrl": "https://picsum.photos/seed/2/40/40",
+      "imageHint": "person portrait"
+    },
+    {
+      "id": "user-avatar-3",
+      "description": "Avatar for John Smith",
+      "imageUrl": "https://picsum.photos/seed/3/40/40",
+      "imageHint": "person portrait"
+    },
+    {
+      "id": "user-avatar-4",
+      "description": "Avatar for Emily Jones",
+      "imageUrl": "https://picsum.photos/seed/4/40/40",
+      "imageHint": "person portrait"
+    },
+    {
+      "id": "design-concept",
+      "description": "Image of design concepts",
+      "imageUrl": "https://picsum.photos/seed/design/400/300",
+      "imageHint": "design abstract"
+    }
+  ]
 }
