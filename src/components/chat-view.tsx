@@ -34,6 +34,11 @@ export function ChatView({ chat }: ChatViewProps) {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const { toast } = useToast();
   const [useSmartNotifications, setUseSmartNotifications] = useState(true);
+  const [isClient, setIsClient] = useState(false);
+
+  useEffect(() => {
+    setIsClient(true);
+  }, []);
 
   useEffect(() => {
     setMessages(chat.messages);
@@ -177,7 +182,7 @@ export function ChatView({ chat }: ChatViewProps) {
                     <div className="flex items-baseline gap-2">
                       <span className="font-bold">{message.author.name}</span>
                       <span className="text-xs text-muted-foreground">
-                        {format(new Date(message.timestamp), 'h:mm a')}
+                        {isClient ? format(new Date(message.timestamp), 'h:mm a') : ''}
                       </span>
                     </div>
                   )}
