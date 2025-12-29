@@ -1,0 +1,534 @@
+// =============================================================================
+// ConnectNow Messaging App - Prisma Schema
+// =============================================================================
+// Database: PostgreSQL
+// ORM: Prisma
+// Features: Real-time messaging, channels, DMs, file uploads, soft deletes
+// =============================================================================
+
+generator client {
+  provider        = "prisma-client-js"
+  previewFeatures = ["fullTextSearch", "fullTextIndex"]
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// =============================================================================
+// ENUMS
+// =============================================================================
+
+enum UserStatus {
+  ONLINE
+  OFFLINE
+  AWAY
+  DO_NOT_DISTURB
+}
+
+enum UserRole {
+  USER
+  MODERATOR
+  ADMIN
+}
+
+enum ChannelType {
+  PUBLIC      // Anyone can join
+  PRIVATE     // Invite only
+  ANNOUNCEMENT // Only admins can post
+}
+
+enum ChannelMemberRole {
+  MEMBER
+  MODERATOR
+  ADMIN
+  OWNER
+}
+
+enum MessageType {
+  TEXT
+  FILE
+  SYSTEM      // Join/leave notifications, etc.
+  REPLY
+}
+
+enum FileType {
+  IMAGE
+  VIDEO
+  AUDIO
+  DOCUMENT
+  OTHER
+}
+
+enum NotificationType {
+  MESSAGE
+  MENTION
+  CHANNEL_INVITE
+  DM_REQUEST
+  SYSTEM
+}
+
+// =============================================================================
+// USER & AUTHENTICATION
+// =============================================================================
+
+// Core user table - integrates with NextAuth.js
+model User {
+  id            String     @id @default(cuid())
+  email         String     @unique
+  emailVerified DateTime?  @map("email_verified")
+  name          String
+  displayName   String?    @map("display_name")
+  avatarUrl     String?    @map("avatar_url")
+  bio           String?
+  status        UserStatus @default(OFFLINE)
+  lastSeenAt    DateTime?  @map("last_seen_at")
+  role          UserRole   @default(USER)
+  createdAt     DateTime   @default(now()) @map("created_at")
+  updatedAt     DateTime   @updatedAt @map("updated_at")
+
+  // NextAuth.js required relations
+  accounts Account[]
+  sessions Session[]
+
+  // App relations
+  channelMemberships ChannelMember[]
+  sentMessages       Message[]             @relation("MessageAuthor")
+  directMessagesSent DirectMessageThread[] @relation("DMCreator")
+  dmParticipations   DirectMessageParticipant[]
+  directMessages     DirectMessage[]       @relation("DirectMessageAuthor")
+  reactions          MessageReaction[]
+  notifications      Notification[]
+  preferences        UserPreferences?
+  readReceipts       ReadReceipt[]
+  typingIndicators   TypingIndicator[]
+  fileUploads        FileUpload[]
+
+  // For @mentions - tracks when user is mentioned
+  mentions Mention[]
+
+  @@index([email])
+  @@index([status])
+  @@index([lastSeenAt])
+  @@map("users")
+}
+
+// NextAuth.js Account model - for OAuth providers
+model Account {
+  id                String  @id @default(cuid())
+  userId            String  @map("user_id")
+  type              String
+  provider          String
+  providerAccountId String  @map("provider_account_id")
+  refresh_token     String? @db.Text
+  access_token      String? @db.Text
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String? @db.Text
+  session_state     String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+  @@index([userId])
+  @@map("accounts")
+}
+
+// NextAuth.js Session model
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique @map("session_token")
+  userId       String   @map("user_id")
+  expires      DateTime
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("sessions")
+}
+
+// NextAuth.js Verification Token model
+model VerificationToken {
+  identifier String
+  token      String   @unique
+  expires    DateTime
+
+  @@unique([identifier, token])
+  @@map("verification_tokens")
+}
+
+// User preferences for notifications, AI features, etc.
+model UserPreferences {
+  id                     String   @id @default(cuid())
+  userId                 String   @unique @map("user_id")
+
+  // Notification preferences
+  emailNotifications     Boolean  @default(true) @map("email_notifications")
+  pushNotifications      Boolean  @default(true) @map("push_notifications")
+  soundEnabled           Boolean  @default(true) @map("sound_enabled")
+
+  // AI-powered notification filtering (Genkit integration)
+  smartNotifications     Boolean  @default(false) @map("smart_notifications")
+  notificationSummary    Boolean  @default(false) @map("notification_summary")
+  urgentKeywords         String[] @default([]) @map("urgent_keywords")
+
+  // UI preferences
+  theme                  String   @default("system")
+  compactMode            Boolean  @default(false) @map("compact_mode")
+
+  createdAt              DateTime @default(now()) @map("created_at")
+  updatedAt              DateTime @updatedAt @map("updated_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("user_preferences")
+}
+
+// =============================================================================
+// CHANNELS
+// =============================================================================
+
+// Channel represents a group chat room
+model Channel {
+  id          String      @id @default(cuid())
+  name        String
+  slug        String      @unique  // URL-friendly name (e.g., "general", "engineering")
+  description String?
+  type        ChannelType @default(PUBLIC)
+  avatarUrl   String?     @map("avatar_url")
+
+  // Metadata
+  createdById String      @map("created_by_id")
+  createdAt   DateTime    @default(now()) @map("created_at")
+  updatedAt   DateTime    @updatedAt @map("updated_at")
+  archivedAt  DateTime?   @map("archived_at")  // Soft delete for channels
+
+  // Relations
+  members     ChannelMember[]
+  messages    Message[]
+
+  @@index([slug])
+  @@index([type])
+  @@index([createdAt])
+  @@index([archivedAt])
+  @@map("channels")
+}
+
+// Junction table for channel membership with roles
+model ChannelMember {
+  id        String            @id @default(cuid())
+  channelId String            @map("channel_id")
+  userId    String            @map("user_id")
+  role      ChannelMemberRole @default(MEMBER)
+
+  // Notification settings per channel
+  muted     Boolean           @default(false)
+
+  joinedAt  DateTime          @default(now()) @map("joined_at")
+  leftAt    DateTime?         @map("left_at")  // Null if still member
+
+  channel Channel @relation(fields: [channelId], references: [id], onDelete: Cascade)
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([channelId, userId])
+  @@index([channelId])
+  @@index([userId])
+  @@index([joinedAt])
+  @@map("channel_members")
+}
+
+// =============================================================================
+// DIRECT MESSAGES
+// =============================================================================
+
+// Thread represents a DM conversation between 2+ users
+model DirectMessageThread {
+  id        String   @id @default(cuid())
+  createdBy String   @map("created_by")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  // Last activity for sorting conversations
+  lastMessageAt DateTime? @map("last_message_at")
+
+  creator      User                       @relation("DMCreator", fields: [createdBy], references: [id])
+  participants DirectMessageParticipant[]
+  messages     DirectMessage[]
+
+  @@index([lastMessageAt(sort: Desc)])
+  @@index([createdAt])
+  @@map("direct_message_threads")
+}
+
+// Junction table for DM thread participants
+model DirectMessageParticipant {
+  id       String  @id @default(cuid())
+  threadId String  @map("thread_id")
+  userId   String  @map("user_id")
+
+  // Per-user settings
+  muted    Boolean @default(false)
+  archived Boolean @default(false)  // User-specific archive
+
+  joinedAt DateTime @default(now()) @map("joined_at")
+  leftAt   DateTime? @map("left_at")
+
+  thread DirectMessageThread @relation(fields: [threadId], references: [id], onDelete: Cascade)
+  user   User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([threadId, userId])
+  @@index([threadId])
+  @@index([userId])
+  @@map("direct_message_participants")
+}
+
+// Individual DM messages
+model DirectMessage {
+  id        String      @id @default(cuid())
+  threadId  String      @map("thread_id")
+  authorId  String      @map("author_id")
+  content   String      @db.Text
+  type      MessageType @default(TEXT)
+
+  // For replies
+  replyToId String?     @map("reply_to_id")
+
+  // Soft delete
+  deletedAt DateTime?   @map("deleted_at")
+  editedAt  DateTime?   @map("edited_at")
+
+  createdAt DateTime    @default(now()) @map("created_at")
+  updatedAt DateTime    @updatedAt @map("updated_at")
+
+  thread  DirectMessageThread @relation(fields: [threadId], references: [id], onDelete: Cascade)
+  author  User                @relation("DirectMessageAuthor", fields: [authorId], references: [id])
+  replyTo DirectMessage?      @relation("DMReplies", fields: [replyToId], references: [id])
+  replies DirectMessage[]     @relation("DMReplies")
+
+  files     FileUpload[]
+  reactions MessageReaction[]
+  mentions  Mention[]
+
+  @@index([threadId, createdAt])
+  @@index([authorId])
+  @@index([deletedAt])
+  @@index([createdAt])
+  @@map("direct_messages")
+}
+
+// =============================================================================
+// MESSAGES (Channel Messages)
+// =============================================================================
+
+// Messages in channels
+model Message {
+  id        String      @id @default(cuid())
+  channelId String      @map("channel_id")
+  authorId  String      @map("author_id")
+  content   String      @db.Text
+  type      MessageType @default(TEXT)
+
+  // For thread replies within channels
+  parentId  String?     @map("parent_id")
+
+  // Soft delete - preserves message for audit, shows "deleted" to users
+  deletedAt DateTime?   @map("deleted_at")
+  editedAt  DateTime?   @map("edited_at")
+
+  // Optimistic locking for concurrent updates
+  version   Int         @default(1)
+
+  createdAt DateTime    @default(now()) @map("created_at")
+  updatedAt DateTime    @updatedAt @map("updated_at")
+
+  channel   Channel           @relation(fields: [channelId], references: [id], onDelete: Cascade)
+  author    User              @relation("MessageAuthor", fields: [authorId], references: [id])
+  parent    Message?          @relation("MessageThread", fields: [parentId], references: [id])
+  replies   Message[]         @relation("MessageThread")
+
+  files     FileUpload[]
+  reactions MessageReaction[]
+  mentions  Mention[]
+  readBy    ReadReceipt[]
+
+  @@index([channelId, createdAt])
+  @@index([authorId])
+  @@index([parentId])
+  @@index([deletedAt])
+  @@index([createdAt])
+  // Composite index for efficient pagination with soft deletes
+  @@index([channelId, deletedAt, createdAt])
+  @@map("messages")
+}
+
+// =============================================================================
+// FILE UPLOADS
+// =============================================================================
+
+model FileUpload {
+  id              String    @id @default(cuid())
+  uploaderId      String    @map("uploader_id")
+
+  // File metadata
+  fileName        String    @map("file_name")
+  originalName    String    @map("original_name")
+  mimeType        String    @map("mime_type")
+  fileType        FileType  @map("file_type")
+  size            Int       // in bytes
+  url             String
+  thumbnailUrl    String?   @map("thumbnail_url")
+
+  // Optional association with messages
+  messageId       String?   @map("message_id")
+  directMessageId String?   @map("direct_message_id")
+
+  createdAt       DateTime  @default(now()) @map("created_at")
+
+  uploader      User           @relation(fields: [uploaderId], references: [id])
+  message       Message?       @relation(fields: [messageId], references: [id], onDelete: SetNull)
+  directMessage DirectMessage? @relation(fields: [directMessageId], references: [id], onDelete: SetNull)
+
+  @@index([uploaderId])
+  @@index([messageId])
+  @@index([directMessageId])
+  @@index([createdAt])
+  @@map("file_uploads")
+}
+
+// =============================================================================
+// REACTIONS & INTERACTIONS
+// =============================================================================
+
+model MessageReaction {
+  id              String  @id @default(cuid())
+  userId          String  @map("user_id")
+  emoji           String  // Unicode emoji or custom emoji code
+
+  // Polymorphic - either messageId OR directMessageId
+  messageId       String? @map("message_id")
+  directMessageId String? @map("direct_message_id")
+
+  createdAt       DateTime @default(now()) @map("created_at")
+
+  user          User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  message       Message?       @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  directMessage DirectMessage? @relation(fields: [directMessageId], references: [id], onDelete: Cascade)
+
+  // User can only react once with same emoji per message
+  @@unique([userId, emoji, messageId])
+  @@unique([userId, emoji, directMessageId])
+  @@index([messageId])
+  @@index([directMessageId])
+  @@map("message_reactions")
+}
+
+// Tracks @mentions in messages
+model Mention {
+  id              String  @id @default(cuid())
+  userId          String  @map("user_id")  // Who was mentioned
+
+  // Which message contains the mention
+  messageId       String? @map("message_id")
+  directMessageId String? @map("direct_message_id")
+
+  // Whether the mentioned user has seen it
+  readAt          DateTime? @map("read_at")
+
+  createdAt       DateTime @default(now()) @map("created_at")
+
+  user          User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  message       Message?       @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  directMessage DirectMessage? @relation(fields: [directMessageId], references: [id], onDelete: Cascade)
+
+  @@index([userId, readAt])
+  @@index([messageId])
+  @@index([directMessageId])
+  @@map("mentions")
+}
+
+// =============================================================================
+// READ RECEIPTS & TYPING INDICATORS
+// =============================================================================
+
+// Tracks which messages users have read (for unread counts)
+model ReadReceipt {
+  id        String   @id @default(cuid())
+  userId    String   @map("user_id")
+  messageId String   @map("message_id")
+  readAt    DateTime @default(now()) @map("read_at")
+
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  message Message @relation(fields: [messageId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, messageId])
+  @@index([userId])
+  @@index([messageId])
+  @@map("read_receipts")
+}
+
+// Ephemeral typing indicators (could also be Redis-only)
+model TypingIndicator {
+  id        String   @id @default(cuid())
+  userId    String   @map("user_id")
+  channelId String?  @map("channel_id")
+  threadId  String?  @map("thread_id")  // DM thread
+  startedAt DateTime @default(now()) @map("started_at")
+  expiresAt DateTime @map("expires_at")  // Auto-cleanup
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, channelId])
+  @@unique([userId, threadId])
+  @@index([expiresAt])
+  @@map("typing_indicators")
+}
+
+// =============================================================================
+// NOTIFICATIONS
+// =============================================================================
+
+model Notification {
+  id        String           @id @default(cuid())
+  userId    String           @map("user_id")
+  type      NotificationType
+  title     String
+  body      String
+  data      Json?            // Additional context (messageId, channelId, etc.)
+
+  // AI-determined urgency (Genkit smart notifications)
+  isUrgent  Boolean          @default(false) @map("is_urgent")
+
+  readAt    DateTime?        @map("read_at")
+  createdAt DateTime         @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, readAt])
+  @@index([userId, createdAt])
+  @@index([isUrgent])
+  @@map("notifications")
+}
+
+// =============================================================================
+// AUDIT LOG (Optional - for compliance/debugging)
+// =============================================================================
+
+model AuditLog {
+  id         String   @id @default(cuid())
+  userId     String?  @map("user_id")  // Null for system actions
+  action     String   // e.g., "message.create", "channel.archive"
+  entityType String   @map("entity_type")  // e.g., "Message", "Channel"
+  entityId   String   @map("entity_id")
+  metadata   Json?    // Additional context
+  ipAddress  String?  @map("ip_address")
+  userAgent  String?  @map("user_agent")
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  @@index([userId])
+  @@index([entityType, entityId])
+  @@index([action])
+  @@index([createdAt])
+  @@map("audit_logs")
+}
