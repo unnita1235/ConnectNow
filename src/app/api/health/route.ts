@@ -1,29 +1,21 @@
 import { NextResponse } from 'next/server';
-import prisma from '@/lib/db';
+import { isDatabaseConnected } from '@/lib/db';
 
 export async function GET() {
-  try {
-    // Check database connection
-    await prisma.$queryRaw`SELECT 1`;
+  const dbConnected = await isDatabaseConnected();
 
-    return NextResponse.json({
-      status: 'ok',
-      timestamp: new Date().toISOString(),
-      services: {
-        database: 'connected',
-      },
-    });
-  } catch (error) {
-    console.error('Health check failed:', error);
-    return NextResponse.json(
-      {
-        status: 'error',
-        timestamp: new Date().toISOString(),
-        services: {
-          database: 'disconnected',
-        },
-      },
-      { status: 503 }
-    );
-  }
+  const status = {
+    status: dbConnected ? 'ok' : 'degraded',
+    timestamp: new Date().toISOString(),
+    services: {
+      database: dbConnected ? 'connected' : 'disconnected',
+    },
+    environment: process.env.NODE_ENV || 'development',
+  };
+
+  // Return 503 only if database should be connected but isn't
+  // In development without DATABASE_URL, this is expected
+  const httpStatus = !process.env.DATABASE_URL || dbConnected ? 200 : 503;
+
+  return NextResponse.json(status, { status: httpStatus });
 }
