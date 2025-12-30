@@ -1,0 +1,123 @@
+# =============================================================================
+# ConnectNow Development Services
+# =============================================================================
+# Start with: docker-compose up -d
+# Stop with:  docker-compose down
+# Reset data: docker-compose down -v
+# =============================================================================
+
+services:
+  # ---------------------------------------------------------------------------
+  # PostgreSQL Database
+  # ---------------------------------------------------------------------------
+  postgres:
+    image: postgres:16-alpine
+    container_name: connectnow-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: connectnow_dev
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      # Initialize database with custom scripts (optional)
+      # - ./scripts/init-db.sql:/docker-entrypoint-initdb.d/init.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # ---------------------------------------------------------------------------
+  # Redis (for Socket.io adapter and caching)
+  # ---------------------------------------------------------------------------
+  redis:
+    image: redis:7-alpine
+    container_name: connectnow-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # ---------------------------------------------------------------------------
+  # Redis Commander (Web UI for Redis) - Development only
+  # ---------------------------------------------------------------------------
+  redis-commander:
+    image: rediscommander/redis-commander:latest
+    container_name: connectnow-redis-commander
+    restart: unless-stopped
+    environment:
+      - REDIS_HOSTS=local:redis:6379
+    ports:
+      - "8081:8081"
+    depends_on:
+      - redis
+    profiles:
+      - dev-tools
+
+  # ---------------------------------------------------------------------------
+  # Adminer (Database Web UI) - Development only
+  # ---------------------------------------------------------------------------
+  adminer:
+    image: adminer:latest
+    container_name: connectnow-adminer
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    depends_on:
+      - postgres
+    profiles:
+      - dev-tools
+
+  # ---------------------------------------------------------------------------
+  # MailHog (Email Testing) - Development only
+  # ---------------------------------------------------------------------------
+  mailhog:
+    image: mailhog/mailhog:latest
+    container_name: connectnow-mailhog
+    restart: unless-stopped
+    ports:
+      - "1025:1025"  # SMTP server
+      - "8025:8025"  # Web UI
+    profiles:
+      - dev-tools
+
+volumes:
+  postgres_data:
+  redis_data:
+
+# =============================================================================
+# Usage:
+# =============================================================================
+#
+# Start core services (PostgreSQL + Redis):
+#   docker-compose up -d
+#
+# Start with dev tools (Adminer, Redis Commander, MailHog):
+#   docker-compose --profile dev-tools up -d
+#
+# View logs:
+#   docker-compose logs -f
+#   docker-compose logs -f postgres
+#
+# Connect to PostgreSQL:
+#   docker exec -it connectnow-postgres psql -U postgres -d connectnow_dev
+#
+# Connect to Redis:
+#   docker exec -it connectnow-redis redis-cli
+#
+# Access dev tools:
+#   Adminer:          http://localhost:8080
+#   Redis Commander:  http://localhost:8081
+#   MailHog:          http://localhost:8025
+#
+# =============================================================================
