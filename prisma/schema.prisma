@@ -1,0 +1,616 @@
+// =============================================================================
+// CONNECTNOW DATABASE SCHEMA
+// =============================================================================
+// A complete, production-ready Prisma schema for a real-time messaging platform
+// Similar to Slack + Discord with video calls and team collaboration
+//
+// Tables:
+// - User: User accounts with authentication
+// - Session: User sessions for JWT management
+// - Workspace: Team workspaces (like Slack workspaces)
+// - WorkspaceMember: Many-to-many between users and workspaces
+// - Channel: Channels within workspaces (public/private)
+// - ChannelMember: Many-to-many between users and channels
+// - Message: Messages in channels with soft delete support
+// - MessageReaction: Emoji reactions on messages
+// - DirectConversation: 1-on-1 conversation containers
+// - DirectMessage: Messages in direct conversations
+// - UserPresence: Real-time online/offline status tracking
+// - Attachment: File attachments for messages
+//
+// Author: ConnectNow Team
+// Last Updated: 2024
+// =============================================================================
+
+generator client {
+  provider = "prisma-client-js"
+  // Enable preview features for better performance
+  previewFeatures = ["fullTextSearch", "fullTextIndex"]
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// =============================================================================
+// ENUMS
+// =============================================================================
+
+/// User online status for presence tracking
+enum UserStatus {
+  ONLINE    // User is actively using the app
+  AWAY      // User is idle (no activity for 5+ minutes)
+  BUSY      // User has set Do Not Disturb
+  OFFLINE   // User is not connected
+}
+
+/// Channel type for different communication modes
+enum ChannelType {
+  TEXT      // Regular text chat channel
+  VOICE     // Voice/video call channel
+  FORUM     // Forum-style threaded discussions
+}
+
+/// Member role within a channel or workspace
+enum MemberRole {
+  OWNER     // Full control, can delete
+  ADMIN     // Can manage members and settings
+  MODERATOR // Can moderate content
+  MEMBER    // Regular member
+  GUEST     // Limited access guest
+}
+
+/// Message type for different content formats
+enum MessageType {
+  TEXT      // Regular text message
+  IMAGE     // Image attachment
+  FILE      // File attachment (documents, etc.)
+  VIDEO     // Video attachment
+  AUDIO     // Audio message
+  SYSTEM    // System-generated message (joins, leaves, etc.)
+}
+
+// =============================================================================
+// USER & AUTHENTICATION
+// =============================================================================
+
+/// User accounts - core identity for the platform
+/// Contains authentication credentials and profile information
+model User {
+  id            String   @id @default(cuid())
+  email         String   @unique
+  username      String   @unique
+  displayName   String?  // Optional display name (can differ from username)
+  passwordHash  String   // bcrypt hashed password (never store plain text!)
+  avatarUrl     String?  // URL to profile picture (Cloudinary/S3)
+  bio           String?  // Short user biography
+
+  // Timestamps
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  lastLoginAt   DateTime? // Track last login for security
+
+  // Email verification
+  emailVerified Boolean  @default(false)
+  emailVerifiedAt DateTime?
+
+  // Account status
+  isActive      Boolean  @default(true)  // For account deactivation
+  isBanned      Boolean  @default(false) // For moderation
+
+  // ==========================================================================
+  // RELATIONSHIPS
+  // ==========================================================================
+
+  // Sessions for this user (multiple devices)
+  sessions            Session[]
+
+  // Workspaces this user owns
+  ownedWorkspaces     Workspace[]       @relation("WorkspaceOwner")
+
+  // Workspace memberships
+  workspaceMemberships WorkspaceMember[]
+
+  // Channels this user is a member of
+  channelMemberships  ChannelMember[]
+
+  // Messages sent by this user
+  messages            Message[]
+
+  // Reactions this user has made
+  reactions           MessageReaction[]
+
+  // Direct conversations as user A
+  conversationsAsA    DirectConversation[] @relation("UserA")
+
+  // Direct conversations as user B
+  conversationsAsB    DirectConversation[] @relation("UserB")
+
+  // Direct messages sent
+  directMessages      DirectMessage[]
+
+  // User's online/offline status
+  presence            UserPresence?
+
+  // Files uploaded by this user
+  attachments         Attachment[]
+
+  // ==========================================================================
+  // INDEXES for performance
+  // ==========================================================================
+  @@index([email])           // Fast email lookup for auth
+  @@index([username])        // Fast username search
+  @@index([createdAt])       // For user listing/pagination
+  @@index([isActive])        // Filter active users
+
+  @@map("users") // Table name in database
+}
+
+/// User sessions for JWT token management
+/// Supports multiple devices and refresh token rotation
+model Session {
+  id           String   @id @default(cuid())
+  userId       String
+
+  // Token management
+  token        String   @unique // JWT access token
+  refreshToken String?  @unique // Refresh token for rotation
+
+  // Session metadata
+  userAgent    String?  // Browser/device info
+  ipAddress    String?  // Last known IP
+
+  // Expiration
+  expiresAt    DateTime
+
+  // Timestamps
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+  lastActiveAt DateTime @default(now()) // Track session activity
+
+  // Relationship
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([token])
+  @@index([refreshToken])
+  @@index([expiresAt])       // For cleanup of expired sessions
+
+  @@map("sessions")
+}
+
+// =============================================================================
+// WORKSPACES
+// =============================================================================
+
+/// Workspaces are team containers (like Slack workspaces)
+/// Each workspace has channels, members, and its own settings
+model Workspace {
+  id          String   @id @default(cuid())
+  name        String
+  slug        String   @unique // URL-friendly name (e.g., "acme-corp")
+  description String?
+  iconUrl     String?  // Workspace icon/logo
+
+  // Owner of the workspace (creator)
+  ownerId     String
+  owner       User     @relation("WorkspaceOwner", fields: [ownerId], references: [id])
+
+  // Settings
+  isPublic    Boolean  @default(false) // Can anyone join?
+  inviteCode  String?  @unique // For invite links
+
+  // Timestamps
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  // ==========================================================================
+  // RELATIONSHIPS
+  // ==========================================================================
+
+  // Members of this workspace
+  members     WorkspaceMember[]
+
+  // Channels in this workspace
+  channels    Channel[]
+
+  @@index([ownerId])
+  @@index([slug])
+  @@index([inviteCode])
+  @@index([createdAt])
+
+  @@map("workspaces")
+}
+
+/// Many-to-many relationship between Users and Workspaces
+/// Tracks when users joined and their role in the workspace
+model WorkspaceMember {
+  id          String     @id @default(cuid())
+  workspaceId String
+  userId      String
+
+  role        MemberRole @default(MEMBER)
+  nickname    String?    // Optional per-workspace nickname
+
+  // Timestamps
+  joinedAt    DateTime   @default(now())
+  updatedAt   DateTime   @updatedAt
+
+  // Relationships
+  workspace   Workspace  @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  user        User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  // Ensure unique membership
+  @@unique([workspaceId, userId])
+
+  @@index([userId])       // Find user's workspaces
+  @@index([workspaceId])  // List workspace members
+  @@index([role])         // Filter by role
+
+  @@map("workspace_members")
+}
+
+// =============================================================================
+// CHANNELS
+// =============================================================================
+
+/// Channels are communication spaces within a workspace
+/// Can be public (all workspace members) or private (invite only)
+model Channel {
+  id          String      @id @default(cuid())
+  workspaceId String
+  name        String
+  description String?
+  topic       String?     // Current channel topic
+
+  // Channel configuration
+  type        ChannelType @default(TEXT)
+  isPrivate   Boolean     @default(false)
+  isArchived  Boolean     @default(false) // Soft archive
+
+  // Position for ordering in sidebar
+  position    Int         @default(0)
+
+  // Timestamps
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+  archivedAt  DateTime?   // When was it archived
+
+  // ==========================================================================
+  // RELATIONSHIPS
+  // ==========================================================================
+
+  workspace   Workspace   @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  // Members of this channel (for private channels)
+  members     ChannelMember[]
+
+  // Messages in this channel
+  messages    Message[]
+
+  // Ensure unique channel names within a workspace
+  @@unique([workspaceId, name])
+
+  @@index([workspaceId])           // List channels in workspace
+  @@index([workspaceId, isPrivate]) // Filter public/private
+  @@index([createdAt])
+  @@index([isArchived])
+
+  @@map("channels")
+}
+
+/// Many-to-many relationship between Users and Channels
+/// Required for private channels, optional for public ones
+model ChannelMember {
+  id        String     @id @default(cuid())
+  channelId String
+  userId    String
+
+  role      MemberRole @default(MEMBER)
+
+  // Notification settings per channel
+  isMuted   Boolean    @default(false)
+
+  // Read tracking
+  lastReadAt DateTime? // Last time user read this channel
+  lastReadMessageId String? // Last message ID user has seen
+
+  // Timestamps
+  joinedAt  DateTime   @default(now())
+  updatedAt DateTime   @updatedAt
+
+  // Relationships
+  channel   Channel    @relation(fields: [channelId], references: [id], onDelete: Cascade)
+  user      User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  // Ensure unique membership
+  @@unique([channelId, userId])
+
+  @@index([userId])         // Find user's channels
+  @@index([channelId])      // List channel members
+  @@index([lastReadAt])     // For unread calculations
+
+  @@map("channel_members")
+}
+
+// =============================================================================
+// MESSAGES
+// =============================================================================
+
+/// Messages sent in channels
+/// Supports text, files, reactions, and soft deletion
+model Message {
+  id        String      @id @default(cuid())
+  channelId String
+  userId    String      // Author of the message
+
+  // Message content
+  content   String      @db.Text // Allow long messages
+  type      MessageType @default(TEXT)
+
+  // For replies/threads
+  parentId  String?     // If this is a reply to another message
+
+  // Edit tracking
+  isEdited  Boolean     @default(false)
+  editedAt  DateTime?
+
+  // Soft delete - message content replaced with "[deleted]"
+  isDeleted Boolean     @default(false)
+  deletedAt DateTime?
+
+  // Pinned messages
+  isPinned  Boolean     @default(false)
+  pinnedAt  DateTime?
+  pinnedBy  String?     // User ID who pinned it
+
+  // Timestamps
+  createdAt DateTime    @default(now())
+  updatedAt DateTime    @updatedAt
+
+  // ==========================================================================
+  // RELATIONSHIPS
+  // ==========================================================================
+
+  channel   Channel     @relation(fields: [channelId], references: [id], onDelete: Cascade)
+  user      User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  // Thread replies to this message
+  parent    Message?    @relation("MessageReplies", fields: [parentId], references: [id], onDelete: SetNull)
+  replies   Message[]   @relation("MessageReplies")
+
+  // Reactions on this message
+  reactions MessageReaction[]
+
+  // File attachments
+  attachments Attachment[]
+
+  // Optimistic locking - increment on each update to detect conflicts
+  version   Int         @default(1)
+
+  @@index([channelId, createdAt(sort: Desc)]) // PRIMARY: Message pagination
+  @@index([userId, createdAt(sort: Desc)])    // User's message history
+  @@index([parentId])                          // Thread lookups
+  @@index([channelId, isPinned])               // Find pinned messages
+  @@index([isDeleted])                         // Exclude deleted messages
+
+  @@map("messages")
+}
+
+/// Emoji reactions on messages
+/// Each user can only react once per emoji per message
+model MessageReaction {
+  id        String   @id @default(cuid())
+  messageId String
+  userId    String
+
+  emoji     String   // Unicode emoji or custom emoji code
+
+  createdAt DateTime @default(now())
+
+  // Relationships
+  message   Message  @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  // Prevent duplicate reactions
+  @@unique([messageId, userId, emoji])
+
+  @@index([messageId])  // Get all reactions for a message
+  @@index([userId])     // Get all reactions by a user
+
+  @@map("message_reactions")
+}
+
+// =============================================================================
+// DIRECT MESSAGES
+// =============================================================================
+
+/// Container for direct (1-on-1) conversations between two users
+/// Ensures only one conversation exists between any two users
+model DirectConversation {
+  id        String   @id @default(cuid())
+
+  // The two participants (always store lower ID in userAId for uniqueness)
+  userAId   String
+  userBId   String
+
+  // Timestamps
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Last activity for sorting conversations
+  lastMessageAt DateTime?
+
+  // Relationships
+  userA     User     @relation("UserA", fields: [userAId], references: [id], onDelete: Cascade)
+  userB     User     @relation("UserB", fields: [userBId], references: [id], onDelete: Cascade)
+
+  // Messages in this conversation
+  messages  DirectMessage[]
+
+  // Ensure only one conversation between any two users
+  // Note: Application logic must ensure userAId < userBId for consistency
+  @@unique([userAId, userBId])
+
+  @@index([userAId])
+  @@index([userBId])
+  @@index([lastMessageAt(sort: Desc)]) // Sort by recent activity
+
+  @@map("direct_conversations")
+}
+
+/// Messages in direct conversations
+/// Similar structure to channel messages but simpler
+model DirectMessage {
+  id             String   @id @default(cuid())
+  conversationId String
+  senderId       String   // Who sent this message
+
+  // Message content
+  content        String   @db.Text
+  type           MessageType @default(TEXT)
+
+  // Edit tracking
+  isEdited       Boolean  @default(false)
+  editedAt       DateTime?
+
+  // Soft delete
+  isDeleted      Boolean  @default(false)
+  deletedAt      DateTime?
+
+  // Read receipt
+  isRead         Boolean  @default(false)
+  readAt         DateTime?
+
+  // Timestamps
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  // Relationships
+  conversation   DirectConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  sender         User     @relation(fields: [senderId], references: [id], onDelete: Cascade)
+
+  // File attachments
+  attachments    Attachment[]
+
+  @@index([conversationId, createdAt(sort: Desc)]) // PRIMARY: DM pagination
+  @@index([senderId, createdAt(sort: Desc)])       // Sender's message history
+  @@index([isDeleted])
+  @@index([isRead])                                 // Unread message count
+
+  @@map("direct_messages")
+}
+
+// =============================================================================
+// USER PRESENCE
+// =============================================================================
+
+/// Real-time user online/offline status
+/// Updated via WebSocket connections
+model UserPresence {
+  id          String     @id @default(cuid())
+  userId      String     @unique
+
+  status      UserStatus @default(OFFLINE)
+  statusText  String?    // Custom status message (e.g., "In a meeting")
+
+  // Activity tracking
+  lastActiveAt DateTime  @default(now())
+
+  // Current socket connections (for multi-device)
+  socketIds   String[]   @default([])
+
+  // Timestamps
+  createdAt   DateTime   @default(now())
+  updatedAt   DateTime   @updatedAt
+
+  // Relationship
+  user        User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([status])        // Filter online/offline users
+  @@index([lastActiveAt])  // Sort by recent activity
+
+  @@map("user_presence")
+}
+
+// =============================================================================
+// FILE ATTACHMENTS
+// =============================================================================
+
+/// File attachments that can be added to messages or DMs
+/// Supports images, documents, videos, and audio
+model Attachment {
+  id          String   @id @default(cuid())
+
+  // File info
+  fileName    String   // Original filename
+  fileSize    Int      // Size in bytes
+  mimeType    String   // MIME type (e.g., "image/png")
+  fileUrl     String   // URL to the file (Cloudinary/S3)
+
+  // Optional preview/thumbnail for images
+  thumbnailUrl String?
+
+  // Metadata
+  width       Int?     // For images/videos
+  height      Int?     // For images/videos
+  duration    Int?     // For audio/video (seconds)
+
+  // Owner
+  uploaderId  String
+  uploader    User     @relation(fields: [uploaderId], references: [id], onDelete: Cascade)
+
+  // Can be attached to a channel message or a direct message
+  messageId   String?
+  message     Message? @relation(fields: [messageId], references: [id], onDelete: SetNull)
+
+  directMessageId String?
+  directMessage   DirectMessage? @relation(fields: [directMessageId], references: [id], onDelete: SetNull)
+
+  // Timestamps
+  createdAt   DateTime @default(now())
+
+  @@index([uploaderId])
+  @@index([messageId])
+  @@index([directMessageId])
+  @@index([mimeType])
+
+  @@map("attachments")
+}
+
+// =============================================================================
+// FUTURE TABLES (commented out for Phase 2+)
+// =============================================================================
+
+// /// Video call rooms
+// model CallRoom {
+//   id          String   @id @default(cuid())
+//   channelId   String?
+//   hostId      String
+//   isActive    Boolean  @default(true)
+//   startedAt   DateTime @default(now())
+//   endedAt     DateTime?
+// }
+
+// /// Invite links for workspaces
+// model WorkspaceInvite {
+//   id          String   @id @default(cuid())
+//   workspaceId String
+//   code        String   @unique
+//   expiresAt   DateTime?
+//   maxUses     Int?
+//   uses        Int      @default(0)
+//   createdBy   String
+//   createdAt   DateTime @default(now())
+// }
+
+// /// Notification preferences
+// model NotificationSettings {
+//   id          String   @id @default(cuid())
+//   userId      String   @unique
+//   email       Boolean  @default(true)
+//   push        Boolean  @default(true)
+//   mentions    Boolean  @default(true)
+//   dms         Boolean  @default(true)
+// }
