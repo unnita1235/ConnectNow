@@ -29,6 +29,7 @@ app.get('/health', (req, res) => {
 // Store connected users
 const users = new Map();
 const rooms = new Map();
+let messageCounter = 0;
 
 // Socket.io event handlers
 io.on('connection', (socket) => {
@@ -49,7 +50,7 @@ io.on('connection', (socket) => {
   // Real-time messaging
   socket.on('message:send', (data) => {
     io.emit('message:new', {
-      id: Date.now(),
+      id: `${Date.now()}-${messageCounter++}`,
       sender: data.sender,
       content: data.content,
       channel: data.channel,

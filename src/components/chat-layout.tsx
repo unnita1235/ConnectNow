@@ -41,6 +41,7 @@ export function ChatLayout() {
   const [allDMs] = useState(directMessages);
   const [selectedChat, setSelectedChat] = useState<Chat>(allChannels[0]);
   const [isAddChannelDialogOpen, setIsAddChannelDialogOpen] = useState(false);
+  const channelCounterRef = React.useRef(0);
 
   const chats = useMemo(() => {
     return [...allChannels, ...allDMs];
@@ -55,7 +56,7 @@ export function ChatLayout() {
   
   const handleCreateChannel = (name: string) => {
     const newChannel: Channel = {
-      id: `channel-${Date.now()}`,
+      id: `channel-${Date.now()}-${channelCounterRef.current++}`,
       name: name.toLowerCase().replace(/\s+/g, '-'),
       messages: [],
     };

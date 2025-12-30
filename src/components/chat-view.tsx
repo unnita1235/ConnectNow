@@ -36,6 +36,7 @@ export function ChatView({ chat }: ChatViewProps) {
   const [useSmartNotifications, setUseSmartNotifications] = useState(true);
   const [isClient, setIsClient] = useState(false);
   const blobUrlsRef = useRef<Set<string>>(new Set());
+  const messageCounterRef = useRef(0);
 
   useEffect(() => {
     setIsClient(true);
@@ -69,7 +70,7 @@ export function ChatView({ chat }: ChatViewProps) {
     if (input.trim() === '') return;
 
     const newMessage: Message = {
-      id: `msg-${Date.now()}`,
+      id: `msg-${Date.now()}-${messageCounterRef.current++}`,
       author: currentUser,
       content: input,
       timestamp: new Date().toISOString(),
@@ -103,7 +104,7 @@ export function ChatView({ chat }: ChatViewProps) {
     blobUrlsRef.current.add(blobUrl);
 
     const newMessage: Message = {
-      id: `msg-${Date.now()}`,
+      id: `msg-${Date.now()}-${messageCounterRef.current++}`,
       author: currentUser,
       content: '',
       timestamp: new Date().toISOString(),
