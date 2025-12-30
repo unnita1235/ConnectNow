@@ -35,9 +35,20 @@ export function ChatView({ chat }: ChatViewProps) {
   const { toast } = useToast();
   const [useSmartNotifications, setUseSmartNotifications] = useState(true);
   const [isClient, setIsClient] = useState(false);
+  const blobUrlsRef = useRef<Set<string>>(new Set());
 
   useEffect(() => {
     setIsClient(true);
+  }, []);
+
+  // Cleanup blob URLs on unmount to prevent memory leaks
+  useEffect(() => {
+    return () => {
+      blobUrlsRef.current.forEach(url => {
+        URL.revokeObjectURL(url);
+      });
+      blobUrlsRef.current.clear();
+    };
   }, []);
 
   useEffect(() => {
@@ -88,6 +99,9 @@ export function ChatView({ chat }: ChatViewProps) {
     const file = e.target.files?.[0];
     if (!file) return;
 
+    const blobUrl = URL.createObjectURL(file);
+    blobUrlsRef.current.add(blobUrl);
+
     const newMessage: Message = {
       id: `msg-${Date.now()}`,
       author: currentUser,
@@ -95,7 +109,7 @@ export function ChatView({ chat }: ChatViewProps) {
       timestamp: new Date().toISOString(),
       file: {
         name: file.name,
-        url: URL.createObjectURL(file),
+        url: blobUrl,
         type: file.type.startsWith('image/') ? 'image' : 'other',
       }
     };
